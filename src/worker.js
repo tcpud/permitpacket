@@ -1,16 +1,41 @@
 // Tahoe Cedars permit packet + map download Worker
 //
 // Routes
-//   POST /api/lookup             { streetNumber, streetName } -> { found, address, id }
-//   GET  /download/<id>/packet   permit packet (same file for everyone)
-//   GET  /download/<id>/map      that parcel's map
+//   POST /api/lookup              { streetNumber, streetName } -> { found, address, id, files }
+//   GET  /download/<id>/<file>    one of the PACKET_FILES below, or "map"
 // Everything else is served from /public.
 //
-// Each download is logged to Power Automate (FLOW_URL secret) in the
-// background, so the file is never held up waiting on the flow.
+// Files live in SharePoint. For each download the Worker asks a Power
+// Automate flow (FLOW_URL secret) for the file. The flow returns the PDF
+// and, for Form TC2.1, updates the tracking sheet and emails the team.
 
 import parcels from "./parcels.json";
 import { normalizeNumber, normalizeStreet } from "./normalize.js";
+
+// Packet documents (same for every parcel). "fileName" must match the file
+// in the SharePoint packet folder exactly. Downloads of "application" fill
+// the tracking spreadsheet.
+const PACKET_FILES = [
+  {
+    slug: "application",
+    fileName: "Form TC2.1 - Service Relocation Permit_fillable.pdf",
+    label: "Application Form TC2.1",
+    note: "Fillable form. Complete and return to TCPUD.",
+  },
+  {
+    slug: "guidance",
+    fileName: "PSR Permit Guidance V2.pdf",
+    label: "Permit Guidance",
+    note: "How to fill out and submit your application.",
+  },
+  {
+    slug: "details",
+    fileName: "TAHOE CITY DETAILS V3 JUNE 2026.pdf",
+    label: "Tahoe City Construction Details",
+    note: "Standard drawings for your contractor.",
+  },
+];
+const bySlug = new Map(PACKET_FILES.map((f) => [f.slug, f]));
 
 const byId = new Map(parcels.map((p) => [p.id, p]));
 const BOT_UA = /bot|crawler|spider|preview|scanner|curl|wget|python-requests|headless/i;
@@ -23,7 +48,7 @@ export default {
       return lookup(request);
     }
 
-    const m = url.pathname.match(/^\/download\/([A-Za-z0-9_-]+)\/(packet|map)$/);
+    const m = url.pathname.match(/^\/download\/([A-Za-z0-9_-]+)\/([a-z]+)$/);
     if (m && (request.method === "GET" || request.method === "HEAD")) {
       return download(request, env, ctx, m[1], m[2]);
     }
@@ -51,7 +76,15 @@ async function lookup(request) {
 
   if (hits.length === 1) {
     const p = hits[0];
-    return json({ found: true, address: p.address, id: p.id });
+    return json({
+      found: true,
+      address: p.address,
+      id: p.id,
+      files: [
+        ...PACKET_FILES.map(({ slug, label, note }) => ({ slug, label, note })),
+        { slug: "map", label: "Your Property Map", note: `Map for ${p.address}.` },
+      ],
+    });
   }
   if (hits.length > 1) return json({ found: false, ambiguous: true });
   return json({ found: false });
@@ -61,50 +94,54 @@ async function download(request, env, ctx, id, kind) {
   const parcel = byId.get(id);
   if (!parcel) return new Response("Not found", { status: 404 });
 
-  const key = kind === "map" ? `maps/${parcel.mapFile}` : env.PACKET_KEY;
-  const obj = await env.FILES.get(key);
-  if (!obj) {
-    console.error(`Missing file in R2: ${key}`);
-    return new Response("File not available. Please contact TCPUD.", { status: 404 });
-  }
-
-  const filename = kind === "map"
-    ? customerFilename(parcel.mapFile)
-    : "Tahoe-Cedars-Permit-Application-Packet.pdf";
+  const doc = kind === "map" ? null : bySlug.get(kind);
+  if (kind !== "map" && !doc) return new Response("Not found", { status: 404 });
+  if (request.method === "HEAD") return new Response(null, { status: 200 });
 
   const ua = request.headers.get("user-agent") || "";
-  if (request.method === "GET" && !BOT_UA.test(ua) && env.FLOW_URL) {
-    ctx.waitUntil(logDownload(env, parcel, kind));
-  }
-
-  return new Response(request.method === "HEAD" ? null : obj.body, {
-    headers: {
-      "Content-Type": "application/pdf",
-      "Content-Disposition": contentDisposition(filename),
-      "Content-Length": String(obj.size),
-      "Cache-Control": "private, no-store",
-    },
-  });
-}
-
-async function logDownload(env, parcel, kind) {
   const payload = {
     apn: parcel.apn,
     address: parcel.address,
-    file: kind, // "packet" or "map"
+    file: kind, // "application", "guidance", "details", or "map"
+    folder: doc ? "packet" : "maps",
+    fileName: doc ? doc.fileName : parcel.mapFile,
     appVersion: env.APP_VERSION || "",
     downloadedAt: new Date().toISOString(),
+    log: !BOT_UA.test(ua), // false for bots and link scanners
   };
+
+  let res;
   try {
-    const res = await fetch(env.FLOW_URL, {
+    res = await fetch(env.FLOW_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) console.error(`Flow returned ${res.status} for ${parcel.apn}`);
   } catch (err) {
-    console.error(`Flow call failed for ${parcel.apn}: ${err}`);
+    console.error(`Flow call failed for ${parcel.apn} ${kind}: ${err}`);
+    return unavailable();
   }
+  if (!res.ok) {
+    console.error(`Flow returned ${res.status} for ${parcel.apn} ${kind} (${payload.fileName})`);
+    return unavailable();
+  }
+
+  const filename = doc ? doc.fileName : customerFilename(parcel.mapFile);
+  const headers = {
+    "Content-Type": "application/pdf",
+    "Content-Disposition": contentDisposition(filename),
+    "Cache-Control": "private, no-store",
+  };
+  const len = res.headers.get("content-length");
+  if (len) headers["Content-Length"] = len;
+  return new Response(res.body, { headers });
+}
+
+function unavailable() {
+  return new Response(
+    "This file isn't available right now. Please try again, or email tahoecedars@tcpud.org.",
+    { status: 503, headers: { "Content-Type": "text/plain" } }
+  );
 }
 
 // Removes the word "Permit" from the stored file name so customers don't
