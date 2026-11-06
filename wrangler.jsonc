@@ -1,0 +1,20 @@
+{
+  "name": "permitpacket",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS"
+  },
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "tahoe-cedars-permit-files" }
+  ],
+  "vars": {
+    // Key of the generic permit packet inside the R2 bucket
+    "PACKET_KEY": "packet/Tahoe-Cedars-Permit-Packet.pdf",
+    // Written to the Application Version column. Update when the packet changes.
+    "APP_VERSION": "NOT EARLY TC 2.1"
+  },
+  "observability": { "enabled": true }
+  // FLOW_URL is a secret: npx wrangler secret put FLOW_URL
+}

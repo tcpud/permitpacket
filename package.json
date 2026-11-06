@@ -1,0 +1,11 @@
+{
+  "name": "permitpacket",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-parcels.mjs",
+    "dev": "wrangler dev",
+    "deploy": "node scripts/build-parcels.mjs && wrangler deploy"
+  },
+  "devDependencies": { "wrangler": "^4" }
+}
