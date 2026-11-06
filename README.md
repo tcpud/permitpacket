@@ -1,46 +1,41 @@
-# Tahoe Cedars Permit Packet Download
+# Tahoe Cedars Permit Packet by Email
 
-Property owners enter their address and click one button to download four PDFs: Form TC2.1, Permit Guidance, Tahoe City Details, and their property map.
+Property owners enter their service address and email. The packet (Form TC2.1, Permit Guidance, Tahoe City Details) and their property map are emailed to them from tahoecedars@tcpud.org.
 
 ## How it works
 
-- **Page** (`public/index.html`): same look as the permit status lookup.
-- **Worker** (`src/worker.js`): matches the address, then asks the Power Automate flow for each file.
-- **Flow**: gets the file from SharePoint and returns it. For Form TC2.1 it also fills Application Provided Date and Application Version in the tracking sheet (first download only) and emails tahoecedars@tcpud.org.
-- **Parcel list** (`data/parcels.csv` → `src/parcels.json`): the only addresses the tool will match.
+- **Page** (`public/index.html`): address + email form, same look as the permit status lookup.
+- **Worker** (`src/worker.js`): matches the address against `src/parcels.json`, then sends the request to the Power Automate flow (`FLOW_URL` secret). Limits each visitor, email, and property to 5 requests per minute. A hidden form field quietly drops bot submissions.
+- **Flow**: gets the four PDFs from OneDrive/SharePoint, emails them from the tahoecedars@tcpud.org shared mailbox, replies to the Worker, then runs the Office Script and notifies the team.
+- **Office Script** (`office-script/mark-application-provided.ts`): finds the row by APN. Fills Application Provided Date and Application Version if empty, and adds "Packet emailed to ... on ..." to NOTES. Touches nothing else.
 
-Download links use a random ID per parcel, so nobody can guess another property's link. The word "Permit" is removed from map names at download.
+The map attachment drops the word "Permit" from its name: `Ph1_Permit_7TH AVE 7024.pdf` is attached as `Ph1_7TH AVE 7024.pdf`.
 
-## Files to keep in sync
-
-| What | Where it's set |
-|---|---|
-| Packet file names | `PACKET_FILES` in `src/worker.js` (must match SharePoint exactly) |
-| Map file names | `MapFile` column in `data/parcels.csv` |
-| Application Version text | `APP_VERSION` in `wrangler.jsonc` |
-| SharePoint folders | "Get file content using path" step in the flow |
-
-After changing `data/parcels.csv`, run `npm install` then `npm run build`, and commit the updated `src/parcels.json`.
-
-## Flow request format
-
-The Worker POSTs this to the flow for every download and expects the PDF back:
+## Request the Worker sends to the flow
 
 ```json
 {
   "apn": "015-034-005",
   "address": "7025 7TH AVENUE",
-  "file": "application",
-  "folder": "packet",
-  "fileName": "Form TC2.1 - Service Relocation Permit_fillable.pdf",
+  "email": "owner@example.com",
+  "mapFileName": "Ph1_Permit_7TH AVE 7025.pdf",
+  "mapAttachmentName": "Ph1_7TH AVE 7025.pdf",
   "appVersion": "NOT EARLY TC 2.1",
-  "downloadedAt": "2026-11-05T23:56:31.851Z",
-  "log": true
+  "requestedAt": "2026-11-06T16:46:39.020Z"
 }
 ```
 
-`file` is `application`, `guidance`, `details`, or `map`. `folder` is `packet` or `maps`. `log` is false for bots and link scanners.
+The flow must reply with status 200 after the customer email is sent. Anything else shows the customer an error.
+
+## Keeping things in sync
+
+| What | Where it's set |
+|---|---|
+| Parcels and map file names | `data/parcels.csv`, then `npm run build` and commit `src/parcels.json` |
+| Packet file names and folders | The three packet "Get file content using path" steps in the flow |
+| Application Version text | `APP_VERSION` in `wrangler.jsonc` |
+| Customer email wording | "Send an email from a shared mailbox" step in the flow |
 
 ## Deploy
 
-GitHub repo connected to Cloudflare Workers (Import a repository). Set `FLOW_URL` as a secret under the Worker's Settings > Variables and Secrets.
+GitHub repo connected to Cloudflare Workers. `FLOW_URL` is a Secret under the Worker's Settings > Variables and Secrets.

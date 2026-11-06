@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Permit Packet Download | Tahoe City Public Utility District</title>
+<title>Permit Application Packet | Tahoe City Public Utility District</title>
 <style>
   :root {
     --lake: #15435C;
@@ -63,13 +63,13 @@
 
   .field-hint { font-size: 13px; color: var(--granite); margin: -2px 0 12px; }
 
-  input[type="text"] {
+  input[type="text"], input[type="email"] {
     width: 100%; font-size: 17px; padding: 14px 16px;
     border: 2px solid var(--line); border-radius: 10px;
     background: var(--paper); color: var(--lake-deep);
   }
 
-  input[type="text"]:focus { border-color: var(--lake); outline: 2px solid var(--lake); outline-offset: 1px; }
+  input[type="text"]:focus, input[type="email"]:focus { border-color: var(--lake); outline: 2px solid var(--lake); outline-offset: 1px; }
 
   button, .dl {
     display: block; width: 100%; margin-top: 16px; padding: 15px 20px;
@@ -112,6 +112,10 @@
   .dl-status .missing { display: block; margin-top: 8px; font-weight: 400; font-size: 13px; color: var(--granite); }
   .dl-status a { color: var(--lake); }
 
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+  .sent-list { margin: 10px 0 0; padding-left: 20px; color: var(--granite); font-size: 15px; }
+
   .not-found, .error-state {
     border: 1px solid var(--line); border-radius: 12px; padding: 20px;
     font-size: 15px; color: var(--granite);
@@ -130,8 +134,8 @@
 
 <header>
   <div class="eyebrow">Tahoe City Public Utility District &middot; Tahoe Cedars Project</div>
-  <h1>Download Your Permit Application Packet</h1>
-  <p class="subtitle">Enter your service address to get the application packet and the map for your property.</p>
+  <h1>Get Your Permit Application Packet</h1>
+  <p class="subtitle">Enter your service address and email. We'll email you the application packet and the map for your property.</p>
 </header>
 
 <p class="notice">This tool is currently available for <strong>Phase 1</strong> customers only.</p>
@@ -146,9 +150,19 @@
 
       <label for="street-name">Street name</label>
       <p class="field-hint">Example: Elm St, or 9th Ave</p>
-      <input type="text" id="street-name" placeholder="Street name" autocomplete="off" required>
+      <input type="text" id="street-name" placeholder="Street name" autocomplete="off" required
+             style="margin-bottom:16px;">
 
-      <button type="submit" id="submit-btn">Find My Packet</button>
+      <label for="email">Email address</label>
+      <p class="field-hint">We'll send the packet here.</p>
+      <input type="email" id="email" placeholder="you@example.com" autocomplete="email" required>
+
+      <div class="hp" aria-hidden="true">
+        <label for="website">Leave this blank</label>
+        <input type="text" id="website" tabindex="-1" autocomplete="off">
+      </div>
+
+      <button type="submit" id="submit-btn">Email My Packet</button>
     </form>
 
     <div id="result" role="status" aria-live="polite"></div>
@@ -170,86 +184,70 @@
     return div.innerHTML;
   }
 
-  function fileUrl(id, slug) {
-    return "/download/" + encodeURIComponent(id) + "/" + encodeURIComponent(slug);
-  }
-
-  function showPacket(data) {
-    const files = data.files || [];
-    resultEl.innerHTML =
-      '<div class="result-panel">' +
-        '<p class="result-address">' + escapeHtml(data.address) + '</p>' +
-        '<p class="result-title">Your permit application packet is ready</p>' +
-        '<ul class="file-list">' +
-          files.map(function (f) { return '<li>' + escapeHtml(f.label) + '</li>'; }).join('') +
-        '</ul>' +
-        '<button type="button" class="dl" id="download-all">Download Packet' +
-          '<small>' + files.length + ' PDF files</small></button>' +
-        '<p id="dl-status" class="dl-status" aria-live="polite"></p>' +
-        '<p class="status-note">These documents are for applying only. They are not an issued permit. ' +
-          'Return your completed application to ' +
-          '<a href="mailto:tahoecedars@tcpud.org">tahoecedars@tcpud.org</a>.</p>' +
-      '</div>';
-
-    document.getElementById("download-all").addEventListener("click", function () {
-      downloadAll(data.id, files, this);
-    });
-  }
-
-  // Starts each file's download in turn. The short gap keeps browsers
-  // from dropping downloads that start at the same instant.
-  async function downloadAll(id, files, btn) {
-    const statusEl = document.getElementById("dl-status");
-    btn.disabled = true;
-    for (let i = 0; i < files.length; i++) {
-      btn.firstChild.textContent = "Downloading " + (i + 1) + " of " + files.length + "...";
-      const a = document.createElement("a");
-      a.href = fileUrl(id, files[i].slug);
-      a.download = "";
-      a.style.display = "none";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      await new Promise(function (r) { setTimeout(r, 1200); });
-    }
-    btn.firstChild.textContent = "Download Packet Again";
-    btn.disabled = false;
-    statusEl.innerHTML =
-      'Check your Downloads folder for ' + files.length + ' PDF files. ' +
-      'They can take a few seconds each to arrive. If your browser asks to allow multiple downloads, choose Allow.' +
-      '<span class="missing">Missing a file? ' +
-      files.map(function (f) {
-        return '<a href="' + fileUrl(id, f.slug) + '" download>' + escapeHtml(f.label) + '</a>';
-      }).join(' &middot; ') +
-      '</span>';
-  }
+  const emailEl = document.getElementById("email");
 
   function reset() {
     submitBtn.disabled = false;
-    submitBtn.textContent = "Find My Packet";
+    submitBtn.textContent = "Email My Packet";
+  }
+
+  function showError(html) {
+    resultEl.innerHTML = '<div class="error-state">' + html + '</div>';
   }
 
   form.addEventListener("submit", async function (e) {
     e.preventDefault();
     const streetNumber = document.getElementById("street-number").value.trim();
     const streetName = document.getElementById("street-name").value.trim();
+    const email = emailEl.value.trim();
     if (!streetNumber || !streetName) return;
+    if (!email || !emailEl.checkValidity()) {
+      showError("Please enter a valid email address.");
+      emailEl.focus();
+      return;
+    }
 
     submitBtn.disabled = true;
-    submitBtn.textContent = "Searching...";
-    resultEl.innerHTML = '<p class="loading">Looking up your address...</p>';
+    submitBtn.textContent = "Sending...";
+    resultEl.innerHTML = '<p class="loading">Sending your packet. This can take up to 30 seconds...</p>';
 
     try {
-      const res = await fetch("/api/lookup", {
+      const res = await fetch("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ streetNumber: streetNumber, streetName: streetName })
+        body: JSON.stringify({
+          streetNumber: streetNumber,
+          streetName: streetName,
+          email: email,
+          website: document.getElementById("website").value
+        })
       });
-      if (!res.ok) throw new Error("Request failed");
-      const data = await res.json();
+      const data = await res.json().catch(function () { return {}; });
 
-      if (data.found) {
-        showPacket(data);
+      if (data.sent) {
+        resultEl.innerHTML =
+          '<div class="result-panel">' +
+            (data.address ? '<p class="result-address">' + escapeHtml(data.address) + '</p>' : '') +
+            '<p class="result-title">Your packet is on its way</p>' +
+            '<p style="margin:0;color:var(--granite);font-size:15px;">We emailed these to <strong>' +
+              escapeHtml(email) + '</strong> from tahoecedars@tcpud.org:</p>' +
+            '<ul class="sent-list">' +
+              '<li>Application Form TC2.1</li>' +
+              '<li>Permit Guidance</li>' +
+              '<li>Tahoe City Construction Details</li>' +
+              '<li>Your Property Map</li>' +
+            '</ul>' +
+            '<p class="status-note">Don\'t see it in a few minutes? Check your spam or junk folder. ' +
+              'These documents are for applying only. They are not an issued permit.</p>' +
+          '</div>';
+        form.reset();
+      } else if (data.error === "bad_email") {
+        showError("Please enter a valid email address.");
+      } else if (data.error === "too_many") {
+        showError("Too many requests. Please wait a minute and try again.");
+      } else if (data.error) {
+        showError('We couldn\'t send your packet right now. Please try again shortly, or email ' +
+          '<a href="mailto:tahoecedars@tcpud.org">tahoecedars@tcpud.org</a>.');
       } else if (data.ambiguous) {
         resultEl.innerHTML =
           '<div class="not-found">We found more than one property matching that address. ' +
@@ -260,8 +258,7 @@
           'Double-check the spelling, or contact TCPUD if you believe this is an error.</div>';
       }
     } catch (err) {
-      resultEl.innerHTML =
-        '<div class="error-state">Something went wrong. Please try again in a moment.</div>';
+      showError("Something went wrong. Please try again in a moment.");
     } finally {
       reset();
     }
